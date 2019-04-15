@@ -40,3 +40,4 @@ venv.bak/
 *.tif
 movie_generation/data/
 *.pth
+*.mat
