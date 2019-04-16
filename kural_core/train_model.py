@@ -2,27 +2,29 @@ import torch
 import time
 import numpy as np
 import math
+from IPython.display import clear_output
 def train_model(model, train_dl, val_dl, opt, criterion, lr_start, lr_end=None, epochs=3, cycles=1, restarts=1, clip=50, print_epoch = True):
     try:
         train_loss = []
         val_loss = []
         if lr_end is None: lr_end = lr_start
         for restart in range(restarts):
-            print(f'restart number {restart+1} out of {restarts}')
+            # print(f'restart number {restart+1} out of {restarts}')
         #     if len(train_loss)>0: opt = optim.SGD(model.parameters(),lr=lr_start,momentum=0.9)
             time_list = []
             epoch_time_list = None
             cycle_print_str = 'Cycle: 0 ~ Remaining total: Unknown'
-            print(cycle_print_str,end='')
+            # print(cycle_print_str)
             for cycle in range(cycles):
-                ts = time.clock()
+                ts = time.perf_counter()
         #         if cycle>0: epochs = epochs*2
                 lr_start = lr_start*(0.99)
                 epoch_print_str = f' ~ Epoch: 0 ~ Remaining in cycle: {(epochs*np.mean(epoch_time_list) if epoch_time_list is not None else 0):.3g}s'
-                print(epoch_print_str, end='')
+                clear_output(wait=True)
+                print(cycle_print_str + epoch_print_str)
                 epoch_time_list = []
                 for epoch in range(epochs):
-                    ets = time.clock()
+                    ets = time.perf_counter()
                     opt.param_groups[0]['lr'] = lr_end + 0.5*(lr_start-lr_end)*(1+math.cos(cycle/cycles*np.pi))
                     running_loss = 0.0
                     model.train()
@@ -45,22 +47,24 @@ def train_model(model, train_dl, val_dl, opt, criterion, lr_start, lr_end=None, 
                             y_pred = model(x_val)
                             running_loss += criterion(y_pred,y_val).item()
                         val_loss.append(running_loss/len(val_dl))
-                    epoch_time_list.append(time.clock()-ets)
-                    if epoch_print_str and print_epoch:
-                        for _ in range(len(epoch_print_str)):
-                            print('\b',end='')
+                    epoch_time_list.append(time.perf_counter()-ets)
+                    if print_epoch:
                         epoch_time = (epochs-(epoch+1))*np.mean(epoch_time_list)
-                        epoch_print_str = f' ~ Epoch: {epoch+1:2d}/{epochs} ~ Remaining in epoch: {int(epoch_time//3600)}h{int(epoch_time//60)-60*int(epoch_time//3600)}m{epoch_time%60:02.0f}s'
-                        print(epoch_print_str,end='')
-                time_list.append(time.clock()-ts)
-                if cycle_print_str: 
-                    for _ in range(len(cycle_print_str)+len(epoch_print_str)):
-                        print('\b',end='')
+                        epoch_print_str = f' ~ Epoch: {epoch+1:2d}/{epochs} ~ Remaining in cycle: {int(epoch_time//3600)}h{int(epoch_time//60)-60*int(epoch_time//3600)}m{epoch_time%60:02.0f}s'
+                        clear_output(wait=True)
+                        print(cycle_print_str + epoch_print_str)
+                time_list.append(time.perf_counter()-ts)
                 if cycle<cycles-1:
                     remaining_time = (cycles-(cycle+1)-1)*np.mean(time_list)
                     cycle_print_str = f'Finished cycle {cycle+1:3d}/{cycles} ~ Remaining after current cycle: {int(remaining_time//3600)}h{int(remaining_time//60)-60*int(remaining_time//3600)}m{remaining_time%60:02.0f}s'
-                    print(cycle_print_str,end='')
-            print(f'Spent {int(sum(time_list)//60)}m {sum(time_list)%60:2.0f}s doing {cycles*epochs} total steps for an average of {sum(time_list)/cycles/epochs:3.1f}s per step.')
+                    clear_output(wait=True)
+                    print(cycle_print_str+epoch_print_string)
+            clear_output(wait=True)
+            final_print_str = f'Spent {int(sum(time_list)//60)}m {sum(time_list)%60:2.0f}s doing {cycles*epochs} total steps for an average of {sum(time_list)/cycles/epochs:3.1f}s per step.'
+            lfps = len(final_print_str)
+            print('><'*(lfps//2+lfps%2))
+            print(final_print_str)
+            print('><'*(lfps//2+lfps%2))
     except Exception as e:
         print('')
         print(type(e))

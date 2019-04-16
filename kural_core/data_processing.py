@@ -1,4 +1,4 @@
-from fastai.io import *
+from torch.utils.data import Dataset
 import os
 import numpy as np
 from scipy.misc import imresize
