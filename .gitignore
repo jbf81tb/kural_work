@@ -41,3 +41,4 @@ venv.bak/
 movie_generation/data/
 *.pth
 *.mat
+*.pickle

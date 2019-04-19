@@ -3,6 +3,9 @@ import os
 import numpy as np
 from scipy.misc import imresize
 import torch
+from PIL import Image
+import torchvision
+SCALE_FACTOR = 2**16-1
 
 class PooledImageDataset(Dataset):
     def __init__(self, img, num_frames, num_angles, rnn_length=4):
@@ -28,10 +31,10 @@ class AllImageRNNDataset(Dataset):
         self.frame_mod = rnn_length-1
         self.na = num_angles
         self.cpm = num_angles*8 #clips per movie
-        
+
     def __len__(self):
         return (self.nf[-1]-self.frame_mod*self.nf.shape[0])*self.cpm
-    
+
     def __getitem__(self,idx):
         anf = np.concatenate(([0],(self.nf-np.cumsum(self.frame_mod*np.ones_like(self.nf)))*self.cpm)) #adjusted number of frames per movie
         tmp = np.logical_and(idx>=anf[:-1], idx<anf[1:])
@@ -45,8 +48,6 @@ class AllImageRNNDataset(Dataset):
         tmp = tmp.view(self.rnn_length,-1)
         tmp = tmp.float()
         return tmp
-
-SCALE_FACTOR = 2**16-1
 
 class AllImageFolderRNNDataset(Dataset):
     def __init__(self, path, num_frames_list, num_angles=11, rnn_length=4):
@@ -125,7 +126,6 @@ def RandomIndicesForKFoldValidation(ds_len, k, K=5, rand_seed=False, nORp=1):
     if nORp > 1:
         nORp = nORp/ds_len
     return (train_idx[:int(np.round(len(train_idx)*nORp))], val_idx[:int(np.round(len(val_idx)*nORp))])
-
 
 class kMeansImageRNNDataset(Dataset):
     def __init__(self, img, num_frames_list, num_angles, rnn_length=4):
@@ -245,7 +245,7 @@ class BoundingLandmarksDataset(Dataset):
 class Conv_AE_RNN_ImageDataset(Dataset):
     def __init__(self, img, num_frames_list, rnn_length=4):
         self.img = img
-        self.nf = np.concatenate(([0],num_frames_list)) if not np.equal(num_frames_list[0],0) else num_frame_list
+        self.nf = np.concatenate(([0],num_frames_list)) if not np.equal(num_frames_list[0],0) else num_frames_list
         self.rnn_length = rnn_length
         self.frame_mod = rnn_length-1
         self.gc = [] #group count
@@ -309,7 +309,43 @@ class FutureImageDataset(Dataset):
 
     _transformations = {0:_flip_ud, 1:_flip_lr, 2:_T}
 
+def random_affine_transform(imgs):
+    if not isinstance(imgs,list):
+        imgs = [imgs]
+
+    def _flip_ud(input):
+        return torch.flip(input,[2])
+    def _flip_lr(input):
+        return torch.flip(input,[3])
+    def _T(input):
+        return input.transpose(2,3)
+
+    _transformations = {0:_flip_ud, 1:_flip_lr, 2:_T}
+
+    i = np.random.choice(8)
+    for j in range(3):
+        if (i//2**j)%2 == 1:
+            for i in range(len(imgs)):
+                imgs[i] = _transformations[j](imgs[i])
+    
+    return imgs
+
+def random_crop(imgs, out_size):
+    if not isinstance(imgs,list):
+        imgs = [imgs]
+    in_size = imgs[0].shape[2:4]
+    slices = []
+    for i in range(2):
+        mx = in_size[i] - out_size[i] + 1
+        s0 = np.random.choice(mx)
+        slices.append(slice(s0,s0+out_size[i]))
+    for i in range(len(imgs)):
+        imgs[i] = imgs[i][:,:,slices[0],slices[1]]
+
+    return imgs
+
 class EmbeddedFutureImageDataset(Dataset):
+
     def __init__(self, embedding):
         self.e = embedding
 
@@ -318,3 +354,37 @@ class EmbeddedFutureImageDataset(Dataset):
     
     def __getitem__(self, idx):
         return (self.e[idx,:,:-1],self.e[idx,:,-1])
+
+class ActinGanDataset(Dataset):
+    def __init__(self, high_exposure, low_exposure, length=None, num_copy=None):
+        self.he = high_exposure
+        self.le = low_exposure
+        self.length = length if length is not None else self.he.shape[0]
+        if length is None and num_copy is not None:
+            self.length *= num_copy
+
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx):
+        idx = idx%self.he.shape[0]
+        test = self.he[idx]
+        if len(test.shape)==3:
+            imgs = [self.he[idx][None], self.le[idx][None]]
+        else:
+            imgs = [self.he[idx], self.le[idx]]
+        return tuple(random_crop(random_affine_transform(imgs),(128,128)))
+        
+class ActinClassifierDataset(Dataset):
+    def __init__(self, img, classification, length=None):
+        self.img = img
+        self.cls = classification
+        self.length = length if length is not None else self.img.shape[0]
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        idx = idx%self.img.shape[0]
+        img = self.img[idx]
+        return (random_affine_transform(img[None])[0][0], self.cls[idx])

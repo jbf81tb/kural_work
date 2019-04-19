@@ -87,7 +87,6 @@ class NFrameConvolutionalModel(nn.Module):
         x = self.evolve(compressed)
         return self.decompress(x).view(bs,128,128)
 
-
 class MaxPoolDecoderModel(nn.Module):
     def __init__(self, kernel_size):
         super().__init__()
@@ -446,3 +445,81 @@ class FuturePrediction1DConvModel(nn.Module):
         x = self.conv(input)
         x = self.lin(x.squeeze(2))
         return x
+
+class res_block(nn.Module):
+    def __init__(self,c0):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(c0,c0,3,1,1),
+            nn.BatchNorm2d(c0),
+            nn.LeakyReLU(negative_slope=0.05,inplace=True),
+            nn.Conv2d(c0,c0,3,1,1),
+            nn.BatchNorm2d(c0),
+            nn.LeakyReLU(negative_slope=0.05,inplace=True)
+        )
+        self._initialize_weights()
+
+    def forward(self,x):
+        return x + self.conv(x)
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.normal_(m.weight, 0, .001)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+class ActinClassifierModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1,8,3,1,1),
+            nn.BatchNorm2d(8),
+            nn.LeakyReLU(negative_slope=0.05,inplace=True),
+
+            self._down_block(8,16), #64
+            res_block(16),
+            self._down_block(16,32), #32
+            res_block(32),
+            self._down_block(32,64), #16
+            res_block(64),
+            self._down_block(64,128), #8
+            res_block(128),
+
+            nn.Conv2d(128,128,4,2,1), #4
+        )
+        self.classify = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(128*4*4,128),
+            nn.LeakyReLU(negative_slope=0.05,inplace=True),
+            nn.Dropout(),
+            nn.Linear(128,16),
+            nn.LeakyReLU(negative_slope=0.05,inplace=True),
+            nn.Linear(16,2)
+        )
+        self._initialize_weights()
+
+    def _down_block(self,c0,c1):
+        return nn.Sequential(
+            nn.Conv2d(c0,c1,4,2,1),
+            nn.BatchNorm2d(c1),
+            nn.LeakyReLU(negative_slope=0.05,inplace=True)
+        )
+
+    def forward(self,x):
+        x = self.features(x).view(-1,128*4*4)
+        return self.classify(x)
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.constant_(m.weight, 0.01)
+                nn.init.constant_(m.bias, 0)
