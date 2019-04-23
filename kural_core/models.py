@@ -447,29 +447,19 @@ class FuturePrediction1DConvModel(nn.Module):
         return x
 
 class res_block(nn.Module):
-    def __init__(self,c0):
+    def __init__(self, c0, do_batch=[True, True], do_ReLU = [True, True]):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(c0,c0,3,1,1),
-            nn.BatchNorm2d(c0),
-            nn.LeakyReLU(negative_slope=0.05,inplace=True),
-            nn.Conv2d(c0,c0,3,1,1),
-            nn.BatchNorm2d(c0),
-            nn.LeakyReLU(negative_slope=0.05,inplace=True)
-        )
-        self._initialize_weights()
+        self.conv = []
+        self.conv.append(nn.Conv2d(c0,c0,3,1,1))
+        if do_batch[0]: self.conv.append(nn.BatchNorm2d(c0))
+        if do_ReLU[0]:  self.conv.append(nn.LeakyReLU(negative_slope=0.01, inplace=True))
+        self.conv.append(nn.Conv2d(c0,c0,3,1,1))
+        if do_batch[1]: self.conv.append(nn.BatchNorm2d(c0))
+        if do_ReLU[1]:  self.conv.append(nn.LeakyReLU(negative_slope=0.01, inplace=True))
+        self.conv = nn.Sequential(*self.conv)
 
     def forward(self,x):
-        return x + self.conv(x)
-
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.normal_(m.weight, 0, .001)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+        return x + self.conv(x)*0.01
 
 class ActinClassifierModel(nn.Module):
     def __init__(self):
@@ -477,7 +467,7 @@ class ActinClassifierModel(nn.Module):
         self.features = nn.Sequential(
             nn.Conv2d(1,8,3,1,1),
             nn.BatchNorm2d(8),
-            nn.LeakyReLU(negative_slope=0.05,inplace=True),
+            nn.LeakyReLU(negative_slope=0.01,inplace=True),
 
             self._down_block(8,16), #64
             res_block(16),
@@ -493,10 +483,10 @@ class ActinClassifierModel(nn.Module):
         self.classify = nn.Sequential(
             nn.Dropout(),
             nn.Linear(128*4*4,128),
-            nn.LeakyReLU(negative_slope=0.05,inplace=True),
+            nn.LeakyReLU(negative_slope=0.01,inplace=True),
             nn.Dropout(),
             nn.Linear(128,16),
-            nn.LeakyReLU(negative_slope=0.05,inplace=True),
+            nn.LeakyReLU(negative_slope=0.01,inplace=True),
             nn.Linear(16,2)
         )
         self._initialize_weights()
@@ -505,7 +495,7 @@ class ActinClassifierModel(nn.Module):
         return nn.Sequential(
             nn.Conv2d(c0,c1,4,2,1),
             nn.BatchNorm2d(c1),
-            nn.LeakyReLU(negative_slope=0.05,inplace=True)
+            nn.LeakyReLU(negative_slope=0.01,inplace=True)
         )
 
     def forward(self,x):
@@ -515,11 +505,145 @@ class ActinClassifierModel(nn.Module):
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.constant_(m.weight, 1)
+                nn.init.kaiming_normal_(m.weight, a=0.01)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.constant_(m.weight, 0.01)
+
+class ActinUNetModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.inc = inconv(1, 32) #128
+        self.down1 = down(32, 64) #64
+        self.down2 = down(64, 128) #32
+        self.up1 = up(128, 64) #32
+        self.up2 = up(64, 32) #64
+        self.out_mean = outconv(32, 1) #128
+        self.out_std = outconv(32, 1) #128
+        self._initialize_weights()
+
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        y = self.up1(x3, x2)
+        y = self.up2(y, x1)
+        y_mean = self.out_mean(y)
+        y_std = self.out_std(y)
+        return (x + y_mean, y_std)
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, a=0.01)
                 nn.init.constant_(m.bias, 0)
+
+
+class inconv(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, 1, 1),
+            res_block(out_ch, do_batch=[False, False], do_ReLU=[True, False])
+        )
+
+    def forward(self, x): return self.conv(x)
+
+
+class down(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.mpconv = nn.Sequential(
+            res_block(in_ch, do_batch=[False, False], do_ReLU=[True, False]),
+            nn.Conv2d(in_ch, out_ch, 4, 2, 1),
+            nn.LeakyReLU(negative_slope=0.01,inplace=True)
+        )
+
+    def forward(self, x): return self.mpconv(x)
+
+
+class up(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.up = nn.ConvTranspose2d(in_ch, in_ch//2, 2, stride=2)
+        self.conv = nn.Sequential(
+            res_block(in_ch, do_batch=[False, False], do_ReLU=[True, False]),
+            nn.Conv2d(in_ch, out_ch, 3, 1, 1)
+        )
+
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        x = torch.cat([x2, x1], dim=1)
+        x = self.conv(x)
+        return x
+
+
+class outconv(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(outconv, self).__init__()
+        self.conv = nn.Sequential(
+            res_block(in_ch, do_batch=[False, False], do_ReLU=[True, False]),
+            nn.Conv2d(in_ch, out_ch, 3, 1, 1)
+        )
+
+    def forward(self, x): return self.conv(x)
+
+class ActinProbabalisticLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, predicted, actual):
+        actual = actual.flatten()
+        means = predicted[0].flatten()
+        stds = nn.Softmax(0)(predicted[1].flatten()) + 0.001
+        loss = torch.mean(torch.abs(means-actual)/stds + torch.log(stds))
+        return loss
+
+class ActinUNetPerceptualLoss(nn.Module):
+    def __init__(self, classifier_model):
+        super().__init__()
+        self.m = classifier_model
+        blocks = []
+        lmm = list(iter(self.m.modules()))
+        for i, m in enumerate(lmm):
+            if hasattr(m, 'stride'):
+                if m.stride == (2,2):
+                    for j in range(i-1,-1,-1):
+                        if isinstance(lmm[j],nn.Conv2d):
+                            blocks.append(j)
+                            break
+            if len(blocks)==3: break
+        self.blocks = blocks
+
+    def forward(self, y_pred, y_actual):
+        out_pred = [y_pred]
+        out_actual = [y_actual]
+        start = True
+        for b in self.blocks:
+            for j, m in enumerate(self.m.modules()):
+                if not (isinstance(m,nn.Conv2d) or isinstance(m,nn.BatchNorm2d) or isinstance(m, nn.LeakyReLU)): continue
+                if start:
+                    out = m(out_pred[0])
+                    start = False
+                else:
+                    out = m(out)
+                if j == b: break
+            out_pred.append(out*0.1)
+            start = True
+        for b in self.blocks:
+            for j, m in enumerate(self.m.modules()):
+                if not (isinstance(m,nn.Conv2d) or isinstance(m,nn.BatchNorm2d) or isinstance(m, nn.LeakyReLU)): continue
+                if start:
+                    out = m(out_actual[0])
+                    start = False
+                else:
+                    out = m(out)
+                if j == b: break
+            out_actual.append(out*0.1)
+            start = True
+        loss = 0
+        for p, a in zip(out_pred, out_actual):
+            loss += nn.L1Loss()(p,a)
+        return loss

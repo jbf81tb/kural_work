@@ -3,7 +3,7 @@ import math
 import torch
 import numpy as np
 from IPython.display import clear_output
-def train_model(model, train_dl, val_dl, opt, criterion, lr_start, lr_end=None, epochs=3, cycles=1, restarts=1, clip=50, print_epoch=True, is_classification=False, lr_cycle='sin'):
+def train_model(model, train_dl, val_dl, opt, criterion, lr_start, lr_end=None, epochs=3, cycles=1, restarts=1, clip=50, print_epoch=True, is_classification=False, lr_cycle='cos'):
     # try:
         train_loss = []
         val_loss = []

@@ -114,14 +114,14 @@ def RandomIndicesForKFoldValidation(ds_len, k, K=5, rand_seed=False, nORp=1):
     """
     if rand_seed: np.random.seed(rand_seed)
     rand_idx = np.random.permutation(ds_len)
-    if k==0:
+    if k == 0:
         train_idx = rand_idx[:np.int(ds_len*(K-1)/K)]
         val_idx   = rand_idx[np.int(ds_len*(K-1)/K):]
-    elif k==K-1:
+    elif k == K-1:
         train_idx = rand_idx[np.int(ds_len*1/K):]
         val_idx   = rand_idx[:np.int(ds_len*1/K)]
     else:
-        train_idx = np.concatenate((rand_idx[:np.int(ds_len*(K-1-k)/K)],rand_idx[np.int(ds_len*(K-k)/K):]),axis=None)
+        train_idx = np.concatenate((rand_idx[:np.int(ds_len*(K-1-k)/K)], rand_idx[np.int(ds_len*(K-k)/K):]), axis=None)
         val_idx   = rand_idx[np.int(ds_len*(K-1-k)/K):np.int(ds_len*(K-k)/K)]
     if nORp > 1:
         nORp = nORp/ds_len
@@ -388,3 +388,14 @@ class ActinClassifierDataset(Dataset):
         idx = idx%self.img.shape[0]
         img = self.img[idx]
         return (random_affine_transform(img[None])[0][0], self.cls[idx])
+
+class ActinUNetDataset(Dataset):
+    def __init__(self, high_low):
+        self.he, self.le = high_low
+
+    def __len__(self):
+        return self.he.shape[0]
+
+    def __getitem__(self, idx):
+        imgs = random_affine_transform([self.le[idx][None],self.he[idx][None]])
+        return (imgs[0][0], imgs[1][0]-imgs[0][0])
