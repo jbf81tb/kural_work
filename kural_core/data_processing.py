@@ -368,12 +368,11 @@ class ActinGanDataset(Dataset):
     
     def __getitem__(self, idx):
         idx = idx%self.he.shape[0]
-        test = self.he[idx]
-        if len(test.shape)==3:
-            imgs = [self.he[idx][None], self.le[idx][None]]
-        else:
-            imgs = [self.he[idx], self.le[idx]]
-        return tuple(random_crop(random_affine_transform(imgs),(128,128)))
+        imgs = [self.he[idx][None], self.le[idx][None]]
+        imgs = random_crop(random_affine_transform(imgs),(128,128))
+        for i in range(len(imgs)):
+            imgs[i] = (imgs[i]-imgs[i].mean())/imgs[i].std()
+        return imgs
         
 class ActinClassifierDataset(Dataset):
     def __init__(self, img, classification, length=None):
