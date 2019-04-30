@@ -277,8 +277,8 @@ class FutureImageDataset(Dataset):
 
     def __len__(self):
         return self.nf[-1]-len(self.nf)*self.frame_mod
-    
-    def __getitem__(self,idx):
+
+    def __getitem__(self, idx):
         anf = np.concatenate(([0],(self.nf-np.cumsum(self.frame_mod*np.ones_like(self.nf))))) #adjusted number of frames per movie
         tmp = np.logical_and(idx>=anf[:-1], idx<anf[1:])
         movie_number = np.nonzero(tmp)[0][0]
