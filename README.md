@@ -22,3 +22,5 @@ Work in progress. Some tasks show performance, but none scaled into production y
 * Signal-boosting with U-nets
     * Very easy to boost gross structure signal and flatten-out noise
     * Some fine detail is lost, but I believe building a better classifier (__NN__) and using perceptual loss can help this.
+    
+__NN__ : A neural network was used to accomplish this task. All NN architectures can be found in kural_core/models.py
