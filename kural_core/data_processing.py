@@ -396,5 +396,5 @@ class ActinUNetDataset(Dataset):
         return self.he.shape[0]
 
     def __getitem__(self, idx):
-        imgs = random_affine_transform([self.le[idx][None],self.he[idx][None]])
-        return (imgs[0][0], imgs[1][0]-imgs[0][0])
+        imgs = random_affine_transform([self.le[idx][None], self.he[idx][None]])
+        return (imgs[0][0], imgs[1][0])

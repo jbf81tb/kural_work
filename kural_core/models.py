@@ -461,8 +461,21 @@ class res_block(nn.Module):
     def forward(self,x):
         return x + self.conv(x)*0.01
 
+class linear_res_block(nn.Module):
+    def __init__(self, c0, do_ReLU = [True, True]):
+        super(linear_res_block, self).__init__()
+        self.block = []
+        self.block.append(nn.Linear(c0,c0))
+        if do_ReLU[0]: self.block.append(nn.LeakyReLU(negative_slope=0.01, inplace=True))
+        self.block.append(nn.Linear(c0,c0))
+        if do_ReLU[1]: self.block.append(nn.LeakyReLU(negative_slope=0.01, inplace=True))
+        self.block = nn.Sequential(*self.block)
+
+    def forward(self, x):
+        return x + self.block(x)*0.01
+
 class ActinClassifierModel(nn.Module):
-    def __init__(self):
+    def __init__(self, n_classes):
         super().__init__()
         self.features = nn.Sequential(
             nn.Conv2d(1,8,3,1,1),
@@ -482,12 +495,11 @@ class ActinClassifierModel(nn.Module):
         )
         self.classify = nn.Sequential(
             nn.Dropout(),
-            nn.Linear(128*4*4,128),
+            nn.Linear(128*4*4,512),
             nn.LeakyReLU(negative_slope=0.01,inplace=True),
             nn.Dropout(),
-            nn.Linear(128,16),
-            nn.LeakyReLU(negative_slope=0.01,inplace=True),
-            nn.Linear(16,2)
+            linear_res_block(512),
+            nn.Linear(512,n_classes)
         )
         self._initialize_weights()
 
@@ -618,32 +630,33 @@ class ActinUNetPerceptualLoss(nn.Module):
         self.blocks = blocks
 
     def forward(self, y_pred, y_actual):
-        out_pred = [y_pred]
-        out_actual = [y_actual]
+        out_pred = []
+        out_actual = []
+        he = y_pred[0]
         start = True
         for b in self.blocks:
             for j, m in enumerate(self.m.modules()):
                 if not (isinstance(m,nn.Conv2d) or isinstance(m,nn.BatchNorm2d) or isinstance(m, nn.LeakyReLU)): continue
                 if start:
-                    out = m(out_pred[0])
+                    out = m(he)
                     start = False
                 else:
                     out = m(out)
                 if j == b: break
-            out_pred.append(out*0.1)
+            out_pred.append(out)
             start = True
         for b in self.blocks:
             for j, m in enumerate(self.m.modules()):
                 if not (isinstance(m,nn.Conv2d) or isinstance(m,nn.BatchNorm2d) or isinstance(m, nn.LeakyReLU)): continue
                 if start:
-                    out = m(out_actual[0])
+                    out = m(y_actual)
                     start = False
                 else:
                     out = m(out)
                 if j == b: break
-            out_actual.append(out*0.1)
+            out_actual.append(out)
             start = True
-        loss = 0
-        for p, a in zip(out_pred, out_actual):
-            loss += nn.L1Loss()(p,a)
+        loss = ActinProbabalisticLoss()(y_pred, y_actual)/100
+        for pa in zip(out_pred, out_actual):
+            loss += nn.L1Loss()(*pa)
         return loss
