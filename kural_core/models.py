@@ -478,25 +478,25 @@ class ActinClassifierModel(nn.Module):
     def __init__(self, n_classes):
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(1,8,3,1,1),
+            nn.Conv2d(1, 8, 3, 1, 1),
             nn.BatchNorm2d(8),
-            nn.LeakyReLU(negative_slope=0.01,inplace=True),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
 
-            self._down_block(8,16), #64
+            self._down_block(8, 16), #64
             res_block(16),
-            self._down_block(16,32), #32
+            self._down_block(16, 32), #32
             res_block(32),
-            self._down_block(32,64), #16
+            self._down_block(32, 64), #16
             res_block(64),
-            self._down_block(64,128), #8
+            self._down_block(64, 128), #8
             res_block(128),
 
-            nn.Conv2d(128,128,4,2,1), #4
+            nn.Conv2d(128, 128, 4, 2, 1), #4
         )
         self.classify = nn.Sequential(
             nn.Dropout(),
             nn.Linear(128*4*4,512),
-            nn.LeakyReLU(negative_slope=0.01,inplace=True),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
             nn.Dropout(),
             linear_res_block(512),
             nn.Linear(512,n_classes)
@@ -507,12 +507,12 @@ class ActinClassifierModel(nn.Module):
         return nn.Sequential(
             nn.Conv2d(c0,c1,4,2,1),
             nn.BatchNorm2d(c1),
-            nn.LeakyReLU(negative_slope=0.01,inplace=True)
+            nn.LeakyReLU(negative_slope=0.01, inplace=True)
         )
 
     def forward(self,x):
         x = self.features(x).view(-1,128*4*4)
-        return self.classify(x)
+        return self.classify(x).flatten()
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -562,7 +562,6 @@ class inconv(nn.Module):
 
     def forward(self, x): return self.conv(x)
 
-
 class down(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -573,7 +572,6 @@ class down(nn.Module):
         )
 
     def forward(self, x): return self.mpconv(x)
-
 
 class up(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -591,14 +589,13 @@ class up(nn.Module):
         x = self.conv(x)
         return x
 
-
 class outconv(nn.Module):
-    def __init__(self, in_ch, out_ch):
+    def __init__(self, in_ch, out_ch, iterations=1):
         super(outconv, self).__init__()
-        self.conv = nn.Sequential(
-            res_block(in_ch, do_batch=[False, False], do_ReLU=[True, False]),
-            nn.Conv2d(in_ch, out_ch, 3, 1, 1)
-        )
+        conv = []
+        conv += [res_block(in_ch, do_batch=[False, False], do_ReLU=[True, False])]*iterations
+        conv.append(nn.Conv2d(in_ch, out_ch, 3, 1, 1))
+        self.conv = nn.Sequential(*conv)
 
     def forward(self, x): return self.conv(x)
 
@@ -660,3 +657,259 @@ class ActinUNetPerceptualLoss(nn.Module):
         for pa in zip(out_pred, out_actual):
             loss += nn.L1Loss()(*pa)
         return loss
+
+class CellMaskUNetModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.inc = inconv(1, 8) #512, 1200
+        self.down1 = down(8, 16)
+        self.down2 = down(16, 32)
+        self.down3 = down(32, 64)
+        self.down4 = down(64, 128) #32, 75
+        self.up1 = up(128, 64)
+        self.up2 = up(64, 32)
+        self.up3 = up(32, 16)
+        self.up4 = up(16, 8)
+        self.out = outconv(8, 1, iterations=3)
+        self._initialize_weights()
+
+    def forward(self, x):
+        x0 = self.inc(x)
+        x1 = self.down1(x0)
+        x2 = self.down2(x1)
+        x3 = self.down3(x2)
+        x4 = self.down4(x3)
+        y = self.up1(x4, x3)
+        y = self.up2(y, x2)
+        y = self.up3(y, x1)
+        y = self.up4(y, x0)
+        return self.out(y)
+
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, a=0.01)
+                nn.init.constant_(m.bias, 0)
+
+class ConvolutionalAutoencoder256Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        channel_list = [2**i for i in range(8)]
+        conv_list = []
+        for c1, c2 in zip(channel_list[:-1], channel_list[1:]):
+            conv_list += self.simple_down(c1,c2)
+        self.convolution = nn.Sequential(
+            *conv_list,
+            nn.Conv2d(channel_list[-1], channel_list[-1]*2, 2)
+        )
+        
+        channel_list = [256, 256, 128, 128, 128, 128, 64, 64]
+        deconv_list = []
+        for c1, c2 in zip(channel_list[:-1], channel_list[1:]):
+            deconv_list += self.simple_up(c1,c2)
+
+        channel_list = [2**(6-i) for i in range(7)]
+        smooth_list = []
+        for c1, c2 in zip(channel_list[:-1], channel_list[1:]):
+            smooth_list += self.smooth(c1,c2)
+
+        self.deconvolution = nn.Sequential(
+            nn.ConvTranspose2d(256, 256, 2),
+            nn.LeakyReLU(inplace=True), 
+            *deconv_list,
+            *smooth_list
+        )
+        self._initialize_weights()
+    
+    def simple_down(self, in_ch, out_ch):
+        return [
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(in_ch, out_ch, 4, 2),
+            nn.LeakyReLU(inplace=True)
+        ]
+    def simple_up(self, in_ch, out_ch):
+        return [
+            nn.ConvTranspose2d(in_ch, out_ch, 4, 2, 1),
+            nn.LeakyReLU(inplace=True)
+        ]
+    def smooth(self, in_ch, out_ch):
+        return [
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(in_ch, out_ch, 3, 1),
+            nn.LeakyReLU(inplace=True)
+        ]
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, a=0.01)
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self,img):
+        x = self.convolution(img) #x.shape == (batch,256,1,1)
+        return self.deconvolution(x) #shape == (batch,1,256,256)
+
+class CoverageModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 8, 3, 1, 1),
+            nn.BatchNorm2d(8),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+
+            self._down_block(8, 16), #64
+            res_block(16),
+            self._down_block(16, 32), #32
+            res_block(32),
+            self._down_block(32, 64), #16
+            res_block(64),
+            self._down_block(64, 128), #8
+            res_block(128),
+
+            nn.Conv2d(128, 128, 4, 2, 1), #4
+        )
+        self.classify = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(128*4*4, 512),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            nn.Dropout(),
+            linear_res_block(512),
+            nn.Linear(512,1)
+        )
+        self._initialize_weights()
+
+    def _down_block(self,c0,c1):
+        return nn.Sequential(
+            nn.Conv2d(c0, c1, 4, 2, 1),
+            nn.BatchNorm2d(c1),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True)
+        )
+
+    def forward(self,x):
+        x = self.features(x).view(-1,128*4*4)
+        return self.classify(x).squeeze()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, a=0.01)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+class Resnet43Model(nn.Module):
+    def __init__(self, n_classes):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 32, 7, 1, 3),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+
+            self._down_block(32, 64), #64
+            res_block(64),
+            res_block(64),
+            res_block(64),
+            self._down_block(64, 128), #32
+            res_block(128),
+            res_block(128),
+            res_block(128),
+            res_block(128),
+            self._down_block(128, 256), #16
+            res_block(256),
+            res_block(256),
+            res_block(256),
+            res_block(256),
+            res_block(256),
+            self._down_block(256, 512), #8
+            res_block(512),
+            res_block(512),
+            res_block(512),
+            res_block(512),
+            self._down_block(512, 1024), #4
+            res_block(1024),
+            res_block(1024),
+
+            nn.Conv2d(1024, 2048, 4, 2, 1), #2
+        )
+        self.classify = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(2048*2*2,1024),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            nn.Dropout(),
+            linear_res_block(1024),
+            nn.Dropout(),
+            nn.Linear(1024,n_classes)
+        )
+        self._initialize_weights()
+
+    def _down_block(self,c0,c1):
+        return nn.Sequential(
+            nn.Conv2d(c0,c1,4,2,1),
+            nn.BatchNorm2d(c1),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True)
+        )
+
+    def forward(self,x):
+        x = self.features(x).view(-1,2048*2*2)
+        return self.classify(x).flatten()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, a=0.01)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+
+class TimeAfterMitosisRegression3DModel(nn.Module):
+    def __init__(self, z_stacks):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(z_stacks, 64, 3, 1, 1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+
+            self._down_block(64, 128), #64
+            res_block(128),
+            self._down_block(128, 256), #32
+            res_block(256),
+            self._down_block(256, 512), #16
+            res_block(512),
+            self._down_block(512, 1024), #8
+            res_block(1024),
+
+            nn.Conv2d(1024, 1024, 4, 2, 1), #4
+        )
+        self.classify = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(1024*4*4, 1024),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            nn.Dropout(),
+            linear_res_block(1024),
+            nn.Linear(1024, 1)
+        )
+        self._initialize_weights()
+
+    def _down_block(self,c0,c1):
+        return nn.Sequential(
+            nn.Conv2d(c0,c1,4,2,1),
+            nn.BatchNorm2d(c1),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True)
+        )
+
+    def forward(self,x):
+        x = self.features(x).view(-1,1024*4*4)
+        return self.classify(x).flatten()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, a=0.01)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)

@@ -173,12 +173,12 @@ class BBImageDataset(Dataset):
         cy = bound[0]+bound[2]/2
         cx = bound[1]+bound[3]/2
 
-        y_crop = bound[2]/2 + min([bound[0],512-bound[0]-bound[2]])*.2 + np.random.rand()*min([bound[0],512-bound[0]-bound[2]])*.8
-        x_crop = bound[3]/2 + min([bound[1],512-bound[1]-bound[3]])*.2 + np.random.rand()*min([bound[1],512-bound[1]-bound[3]])*.8
-        img = img[int(cy-y_crop):int(cy+y_crop),int(cx-x_crop):int(cx+x_crop)]
+        y_crop = bound[2]/2 + min([bound[0], 512-bound[0]-bound[2]])*.2 + np.random.rand()*min([bound[0], 512-bound[0]-bound[2]])*.8
+        x_crop = bound[3]/2 + min([bound[1], 512-bound[1]-bound[3]])*.2 + np.random.rand()*min([bound[1], 512-bound[1]-bound[3]])*.8
+        img = img[int(cy-y_crop):int(cy+y_crop), int(cx-x_crop):int(cx+x_crop)]
         y_scale = img.shape[0]/512
         x_scale = img.shape[1]/512
-        img = imresize(img,(512,512))
+        img = imresize(img, (512, 512))
 
         bound[0] = y_crop-bound[2]/2
         bound[0] /= y_scale
@@ -280,7 +280,7 @@ class FutureImageDataset(Dataset):
 
     def __getitem__(self, idx):
         anf = np.concatenate(([0],(self.nf-np.cumsum(self.frame_mod*np.ones_like(self.nf))))) #adjusted number of frames per movie
-        tmp = np.logical_and(idx>=anf[:-1], idx<anf[1:])
+        tmp = np.logical_and(idx >= anf[:-1], idx<anf[1:])
         movie_number = np.nonzero(tmp)[0][0]
         addon = int(self.frame_mod*movie_number)
         data_idx = slice(idx+addon,idx+addon+self.input)
@@ -398,3 +398,75 @@ class ActinUNetDataset(Dataset):
     def __getitem__(self, idx):
         imgs = random_affine_transform([self.le[idx][None], self.he[idx][None]])
         return (imgs[0][0], imgs[1][0])
+
+class CellMaskUNetDataset(Dataset):
+    def __init__(self, imgs, mask, ccs):
+        self.imgs = imgs
+        self.mask = mask
+        self.ccs = ccs
+    
+    def __len__(self):
+        return self.imgs.shape[0]
+
+    def __getitem__(self, idx):
+        noise_mean = np.random.rand()*np.ptp(self.ccs[idx])*2
+        noise_std = noise_mean/5
+        h, w = self.imgs[idx].shape
+        img = self.imgs[idx] + torch.randn(h, w, dtype=torch.float)*noise_std + noise_mean
+        img = (img-img.mean())/img.std()
+        imgs = random_affine_transform([img[None, None], self.mask[idx][None, None]])
+        return (imgs[0][0], imgs[1][0])
+
+class AutoencoderWithNoiseDataset(Dataset):
+    def __init__(self, imgs):
+        self.imgs = imgs
+    
+    def __len__(self):
+        return self.imgs.shape[0]
+
+    def __getitem__(self, idx):
+        img = self.imgs[idx]
+        noise_mean = np.random.rand()*torch.mean(img)
+        noise_std = noise_mean/5
+        h, w = img.shape
+        img = img + torch.randn(h, w, dtype=torch.float)*noise_std + noise_mean
+        img = random_affine_transform(random_crop([img[None, None]], out_size=(256, 256)))[0]
+        img = (img-img.mean())/img.std()
+        return (img[0], img[0])
+
+class SimpleAEDataset(Dataset):
+    def __init__(self, imgs):
+        self.imgs = imgs
+    
+    def __len__(self):
+        return self.imgs.shape[0]
+    
+    def __getitem__(self, idx):
+        return (self.imgs[idx][None],)*2
+
+class CoverageDataset(Dataset):
+    def __init__(self, imgs, coverage):
+        self.imgs = imgs
+        self.coverage = coverage
+    
+    def __len__(self):
+        return len(self.imgs)
+    
+    def __getitem__(self, idx):
+        img = self.imgs[idx]
+        coverage = self.coverage[idx]
+        return (random_affine_transform([img[None, None]])[0][0], torch.tensor(coverage).float())
+
+class ClassifierDataset(Dataset):
+    def __init__(self, imgs, classes):
+        self.imgs = imgs
+        self.classes = classes
+    
+    def __len__(self):
+        return self.imgs.shape[0]
+    
+    def __getitem__(self, idx):
+        img = self.imgs[idx]
+        classes = self.classes[idx]
+        return (random_affine_transform([img[None]])[0][0], classes)
+
