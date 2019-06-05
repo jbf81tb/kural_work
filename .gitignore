@@ -43,3 +43,4 @@ movie_generation/data/
 *.mat
 *.pickle
 *.png
+*.txt
